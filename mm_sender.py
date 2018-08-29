@@ -7,6 +7,41 @@ import requests, json
 import hashlib, hmac
 import base64
 
+def compute_hmac(payload_md5, date, http_req, api_secret):
+    # Format the identity string, to be signed by API secret.
+    compounded_str = "Date: %s\nContent-MD5: %s\n%s" % (date, payload_md5, http_req)
+
+    # Generate signature with HMAC-SHA, and base64 encode the result.
+    hmac_bytes = hmac.new(api_secret.encode("ascii"), msg=compounded_str.encode("ascii"), digestmod=hashlib.sha1).digest()
+    hmac_sig = base64.b64encode(hmac_bytes).decode("utf-8")
+
+    return hmac_sig
+
+def generate_headers(payload, api_secret, api_key):
+    # Generate hex digest (MD5) of payload string (as ASCII bytes).
+    payload_md5 = hashlib.md5(payload.encode('ascii')).hexdigest()
+
+    # Generate the RFC7231 HTTP-Date format string, and define HTTP request string.
+    date_str = datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S UTC")
+    http_req_str = "POST /v1/messages HTTP/1.1"
+
+    # Compute HMAC
+    hmac_sig = compute_hmac(payload_md5, date_str, http_req_str, api_secret)
+
+    # Define Authorization header format string.
+    authz_header = 'hmac username="%s", algorithm="hmac-sha1", headers="Date Content-MD5 request-line", signature="%s"'
+
+    # Define the request headers
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Content-MD5': payload_md5,
+        'Date': date_str,
+        'Authorization': authz_header % (api_key, hmac_sig)
+    }
+
+    return headers
+
 def send_sms(api_key, api_secret, dest_num, message):
     # Ensure we have a valid number, and format it in E.164
     number = phonenumbers.parse(dest_num, 'AU')
@@ -29,31 +64,7 @@ def send_sms(api_key, api_secret, dest_num, message):
     }
     request_payload = json.dumps(api_data)
 
-    # Generate hex digest (MD5) of payload string (as ASCII bytes).
-    payload_md5 = hashlib.md5(request_payload.encode('ascii')).hexdigest()
-
-    # Generate the RFC7231 HTTP-Date format string, and define HTTP request string.
-    date_str = datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S UTC")
-    http_req = "POST /v1/messages HTTP/1.1"
-
-    # Format the identity string, to be signed by API secret.
-    compounded_str = "Date: %s\nContent-MD5: %s\n%s" % (date_str, payload_md5, http_req)
-
-    # Generate signature with HMAC-SHA, and base64 encode the result.
-    hmac_bytes = hmac.new(api_secret.encode("ascii"), msg=compounded_str.encode("ascii"), digestmod=hashlib.sha1).digest()
-    hmac_sig = base64.b64encode(hmac_bytes).decode("utf-8")
-
-    # Define Authorization header format string.
-    authz_header = 'hmac username="%s", algorithm="hmac-sha1", headers="Date Content-MD5 request-line", signature="%s"'
-
-    # Define the request headers
-    headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'Content-MD5': payload_md5,
-        'Date': date_str,
-        'Authorization': authz_header % (api_key, hmac_sig)
-    }
+    headers = generate_headers(request_payload, api_secret, api_key)
 
     # Construct and send the request!
     resp = requests.post(url="https://api.messagemedia.com/v1/messages", headers=headers, data=request_payload.encode("ascii"))
